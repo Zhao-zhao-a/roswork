@@ -1,0 +1,18 @@
+<?xml version="1.0" ?>
+<launch>
+    <arg name="robot_type" default="$(env ROBOT_TYPE)" doc="Robot type: [lt, go1, fire, ning]"/>
+    <arg name="description_name"   default="legged_robot_description"/>
+    <param name="legged_robot_description" command="$(find xacro)/xacro $(find legged_n2_description)/urdf/N2.urdf
+    robot_type:=$(arg robot_type)
+ "/>
+    <node name="generate_urdf" pkg="legged_common" type="generate_urdf.sh" output="screen"
+    args="$(find legged_n2_description)/urdf/N2.urdf $(arg robot_type)"/>
+    
+    <rosparam file="$(find rl_controllers)/config/$(arg robot_type)_kd.yaml" command="load"/>
+    <rosparam file="$(find legged_ning_hw)/config/ethercat_config.yaml" command="load"/>
+    <rosparam file="$(find legged_ning_hw)/config/param_path.yaml" command="load"/>
+    <rosparam file="$(find legged_ning_hw)/config/$(arg robot_type).yaml" command="load"/>
+    
+    <node name="legged_ning_hw" pkg="legged_ning_hw" type="legged_ning_hw" output="screen"/>
+    
+</launch>

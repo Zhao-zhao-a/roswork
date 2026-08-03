@@ -1,0 +1,15 @@
+# 机器人的几何形状 (长方形，四足机器人通常为长方形) [长约0.6米 宽约0.4米]
+footprint: [[-0.3, -0.2], [-0.3, 0.2], [0.3, 0.2], [0.3, -0.2]]
+# robot_radius: 0.35 # 如果想要简单点，可以取消上面一行，用这行把它看作一个圆
+
+obstacle_range: 3.0 # 雷达多少米内的障碍物会被加入代价地图
+raytrace_range: 3.5 # 雷达光束多少米内没有打到物体，则清除里面的障碍物
+
+# 膨胀层参数（决定机器人距离墙壁多远才算绝对安全）
+inflation_layer:
+  inflation_radius: 0.8  # 膨胀半径（避障安全距离）
+  cost_scaling_factor: 3.0
+  
+# 观测源：激光雷达
+observation_sources: laser_scan_sensor
+laser_scan_sensor: {sensor_frame: lidar_link, data_type: LaserScan, topic: /scan, marking: true, clearing: true}

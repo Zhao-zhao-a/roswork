@@ -1,0 +1,11 @@
+<launch>
+    <arg name="robot_type" default="ning"/>
+    <arg name="wname" default="my_world"/>
+    <include file="$(find gazebo_ros)/launch/empty_world.launch">
+        <arg name="world_name" value="$(find legged_gazebo)/worlds/$(arg wname).world"/>
+    </include>
+    <!-- push robot_description to factory and spawn robot in gazebo -->
+    <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model" clear_params="true"
+          args="-z 0.8 -param robot_description -urdf -model $(arg robot_type)" output="screen"/>
+
+</launch>

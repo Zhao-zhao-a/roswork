@@ -1,0 +1,79 @@
+<launch>
+  <!-- 1. 加载地图服务器 (替换为你的真实地图文件路径) -->
+  <!-- 如果目前没有地图，先确保你有比如 /maps/my_world.yaml 文件 -->
+  <arg name="map_file" default="$(find legged_n2_description)/maps/my_world.yaml" />
+  <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)" />
+
+  <!-- 2. AMCL 蒙特卡洛定位 -->
+  <node pkg="amcl" type="amcl" name="amcl" output="screen">
+    <!-- 将默认的 base_footprint 纠正为足式的 base_link -->
+    <param name="odom_frame_id" value="odom"/>
+    <param name="base_frame_id" value="base_link"/>
+    <param name="global_frame_id" value="map"/>
+    
+    <!-- 设置初始位姿（确保和建图的原点对齐避免乱飘） -->
+    <param name="initial_pose_x" value="0.0"/>
+    <param name="initial_pose_y" value="0.0"/>
+    <param name="initial_pose_a" value="0.0"/>
+
+    <param name="odom_model_type" value="omni"/>
+    <param name="odom_alpha5" value="0.1"/>
+    <param name="transform_tolerance" value="0.5" />
+    <param name="gui_publish_rate" value="10.0"/>
+    <param name="laser_max_beams" value="30"/>
+    <param name="min_particles" value="500"/>
+    <param name="max_particles" value="5000"/>
+    <param name="kld_err" value="0.05"/>
+    <param name="kld_z" value="0.99"/>
+    <param name="odom_alpha1" value="0.2"/>
+    <param name="odom_alpha2" value="0.2"/>
+    <param name="odom_alpha3" value="0.8"/>
+    <param name="odom_alpha4" value="0.2"/>
+    <param name="laser_z_hit" value="0.5"/>
+    <param name="laser_z_short" value="0.05"/>
+    <param name="laser_z_max" value="0.05"/>
+    <param name="laser_z_rand" value="0.5"/>
+    <param name="laser_sigma_hit" value="0.2"/>
+    <param name="laser_lambda_short" value="0.1"/>
+    <param name="laser_lambda_short" value="0.1"/>
+    <param name="laser_model_type" value="likelihood_field"/>
+    <param name="laser_likelihood_max_dist" value="2.0"/>
+    <param name="update_min_d" value="0.2"/>
+    <param name="update_min_a" value="0.5"/>
+    <param name="resample_interval" value="1"/>
+    <param name="transform_tolerance" value="0.1"/>
+    <param name="recovery_alpha_slow" value="0.0"/>
+    <param name="recovery_alpha_fast" value="0.0"/>
+  </node>
+  
+  <!-- [Simulation] 发布里程计 ODOM 给导航用 -->
+  <node name="gazebo_odom_broadcaster" pkg="legged_n2_description" type="gazebo_odom_broadcaster.py" output="screen" />
+
+  <!-- 3. Move Base 导航核心栈 -->
+  <!-- 注意：把它原本发向 /cmd_vel 的话题重映射给拦截器 -->
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <remap from="cmd_vel" to="/nav_cmd_vel" />
+    <!-- 使用 DWA 路径规划器 -->
+    <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" />
+    
+    <!-- 加载参数配置文件 -->
+    <rosparam file="$(find legged_n2_description)/config/nav/costmap_common_params.yaml" command="load" ns="global_costmap" />
+    <rosparam file="$(find legged_n2_description)/config/nav/costmap_common_params.yaml" command="load" ns="local_costmap" />
+    <rosparam file="$(find legged_n2_description)/config/nav/local_costmap_params.yaml" command="load" />
+    <rosparam file="$(find legged_n2_description)/config/nav/global_costmap_params.yaml" command="load" />
+    <rosparam file="$(find legged_n2_description)/config/nav/dwa_local_planner_params.yaml" command="load" />
+  </node>
+
+  <!-- 3.5 速度放大与死区突破中间件 -->
+  <node name="cmd_vel_amplifier" pkg="legged_n2_description" type="cmd_vel_amplifier.py" output="screen">
+    <!-- 下面参数你可以自己随时调节 -->
+    <param name="scale_linear_x" value="2.0" />  <!-- 线速度放大倍数 -->
+    <param name="scale_angular_z" value="2.0" /> <!-- 角速度放大倍数 -->
+    <param name="min_linear_x" value="0.4" />    <!-- 突破死区的最小线速度 -->
+    <param name="min_angular_z" value="0.4" />   <!-- 突破死区的最小角速度 -->
+  </node>
+
+  <!-- 4. 启动调配好导航元素的 Rviz -->
+  <!-- 专门为导航定制的RViz，额外包含绿色的全局路径和蓝色的局部规划线 -->
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find legged_n2_description)/rviz/full_nav.rviz" output="screen" />
+</launch>

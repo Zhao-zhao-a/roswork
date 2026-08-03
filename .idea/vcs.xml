@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/uavlegged_nav/legged_n2_jump-master1/legged_n2_jump-master1/src/CERLAB-UAV-Autonomy" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/uavlegged_nav/legged_n2_jump-master1/legged_n2_jump-master1/src/CERLAB-UAV-Autonomy/autonomous_flight" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/uavlegged_nav/legged_n2_jump-master1/legged_n2_jump-master1/src/CERLAB-UAV-Autonomy/global_planner" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/uavlegged_nav/legged_n2_jump-master1/legged_n2_jump-master1/src/CERLAB-UAV-Autonomy/map_manager" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/uavlegged_nav/legged_n2_jump-master1/legged_n2_jump-master1/src/CERLAB-UAV-Autonomy/onboard_detector" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/uavlegged_nav/legged_n2_jump-master1/legged_n2_jump-master1/src/CERLAB-UAV-Autonomy/remote_control" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/uavlegged_nav/legged_n2_jump-master1/legged_n2_jump-master1/src/CERLAB-UAV-Autonomy/time_optimizer" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/uavlegged_nav/legged_n2_jump-master1/legged_n2_jump-master1/src/CERLAB-UAV-Autonomy/tracking_controller" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/uavlegged_nav/legged_n2_jump-master1/legged_n2_jump-master1/src/CERLAB-UAV-Autonomy/trajectory_planner" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/uavlegged_nav/legged_n2_jump-master1/legged_n2_jump-master1/src/CERLAB-UAV-Autonomy/uav_simulator" vcs="Git" />
+  </component>
+</project>

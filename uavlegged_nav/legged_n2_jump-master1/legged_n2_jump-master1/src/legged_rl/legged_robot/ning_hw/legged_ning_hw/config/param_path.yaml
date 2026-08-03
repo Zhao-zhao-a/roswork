@@ -1,0 +1,2 @@
+user_param_path:     /home/noetix/legged_n2_mlp/src/legged_rl/legged_robot/ning_hw/legged_ning_hw/config/config.yaml
+ethercat_param_path: /home/noetix/legged_n2_mlp/src/legged_rl/legged_robot/ning_hw/legged_ning_hw/config/ethercat_config.yaml

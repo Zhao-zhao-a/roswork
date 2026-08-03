@@ -1,0 +1,479 @@
+#include "rl_controllers/RLControllerBase.h"
+#include <string.h>
+#include <pluginlib/class_list_macros.hpp>
+#include "rl_controllers/RotationTools.h"
+#include "rl_controllers/utilities.h"
+#include <kdl_parser/kdl_parser.hpp>
+
+namespace legged
+{
+
+  bool RLControllerBase::init(hardware_interface::RobotHW *robotHw, ros::NodeHandle &controllerNH)
+  {
+    // Hardware interface
+    std::vector<std::string> jointNames{
+                                        "arm_l1_joint", "arm_l2_joint", "arm_l3_joint", "arm_l4_joint",
+                                        "leg_l1_joint", "leg_l2_joint", "leg_l3_joint", "leg_l4_joint", "leg_l5_joint",
+                                        "arm_r1_joint", "arm_r2_joint", "arm_r3_joint", "arm_r4_joint",
+                                        "leg_r1_joint", "leg_r2_joint", "leg_r3_joint", "leg_r4_joint", "leg_r5_joint"
+                                      };
+
+
+    std::vector<std::string> footNames{"leg_l5_link","leg_r5_link"};
+    actuatedDofNum_ = jointNames.size();
+
+    // Load policy model and rl cfg
+    if (!loadModel(controllerNH))
+    {
+      ROS_ERROR_STREAM("[RLControllerBase] Failed to load the model. Ensure the path is correct and accessible.");
+      return false;
+    }
+    if (!loadRLCfg(controllerNH))
+    {
+      ROS_ERROR_STREAM("[RLControllerBase] Failed to load the rl config. Ensure the yaml is correct and accessible.");
+      return false;
+    }
+    standJointAngles_.resize(actuatedDofNum_);
+    lieJointAngles_.resize(actuatedDofNum_);
+    auto &StandState = standjointState_;
+    auto &LieState = liejointState_;
+
+    joint_dim_ = actuatedDofNum_;
+    ros::NodeHandle nh;
+    //加载kd
+    nh.getParam("/Kd_config/kd", cfg_kd);
+    nh.getParam("/logFile", log_path_);
+    
+    logRecorder_ = std::make_shared<LogRecorder>(log_path_, actuatedDofNum_, jointNames);
+
+    urdf::Model urdfModel;
+    if (!urdfModel.initParam("legged_robot_description")) {
+      std::cerr << "[LeggedRobotVisualizer] Could not read URDF from: \"legged_robot_description\"" << std::endl;
+    } else {
+      KDL::Tree kdlTree;
+      kdl_parser::treeFromUrdfModel(urdfModel, kdlTree);
+      robotStatePublisherPtr_.reset(new robot_state_publisher::RobotStatePublisher(kdlTree));
+    }
+
+    realJointPosPublisher_ = nh.advertise<std_msgs::Float64MultiArray>("data_analysis/real_joint_pos", 1);
+    realJointVelPublisher_ = nh.advertise<std_msgs::Float64MultiArray>("data_analysis/real_joint_vel", 1);
+    realTorquePublisher_ = nh.advertise<std_msgs::Float64MultiArray>("data_analysis/real_torque", 1);
+
+    realImuAngularVelPublisher_ = nh.advertise<std_msgs::Float64MultiArray>("data_analysis/imu_angular_vel", 1);
+    realImuLinearAccPublisher_ = nh.advertise<std_msgs::Float64MultiArray>("data_analysis/imu_linear_acc", 1);
+    realImuEulerXyzPulbisher = nh.advertise<std_msgs::Float64MultiArray>("data_analysis/imu_euler_xyz", 1);
+
+    outputPlannedJointPosPublisher_ = nh.advertise<std_msgs::Float64MultiArray>("data_analysis/rl_planned_joint_pos", 1);
+    outputPlannedJointVelPublisher_ = nh.advertise<std_msgs::Float64MultiArray>("data_analysis/rl_planned_joint_vel", 1);
+    outputPlannedTorquePublisher_ = nh.advertise<std_msgs::Float64MultiArray>("data_analysis/rl_planned_torque", 1);
+
+    // Stand Lie joint
+    lieJointAngles_ <<  LieState.arm_l1_joint, LieState.arm_l2_joint, LieState.arm_l3_joint, LieState.arm_l4_joint, 
+                        LieState.leg_l1_joint, LieState.leg_l2_joint, LieState.leg_l3_joint, LieState.leg_l4_joint, LieState.leg_l5_joint,
+                        LieState.arm_r1_joint, LieState.arm_r2_joint, LieState.arm_r3_joint, LieState.arm_r4_joint,
+                        LieState.leg_r1_joint, LieState.leg_r2_joint, LieState.leg_r3_joint, LieState.leg_r4_joint, LieState.leg_r5_joint;
+
+
+    standJointAngles_ <<  StandState.arm_l1_joint, StandState.arm_l2_joint, StandState.arm_l3_joint, StandState.arm_l4_joint, 
+                          StandState.leg_l1_joint, StandState.leg_l2_joint, StandState.leg_l3_joint, StandState.leg_l4_joint, StandState.leg_l5_joint,
+                          StandState.arm_r1_joint, StandState.arm_r2_joint, StandState.arm_r3_joint, StandState.arm_r4_joint,
+                          StandState.leg_r1_joint, StandState.leg_r2_joint, StandState.leg_r3_joint, StandState.leg_r4_joint, StandState.leg_r5_joint;
+                          
+    auto *hybridJointInterface = robotHw->get<HybridJointInterface>();
+    for (const auto &jointName : jointNames)
+    {
+      hybridJointHandles_.push_back(hybridJointInterface->getHandle(jointName));
+    }
+
+    imuSensorHandles_ = robotHw->get<hardware_interface::ImuSensorInterface>()->getHandle("base_imu");
+
+    cmdVelSub_ = controllerNH.subscribe("/cmd_vel", 1, &RLControllerBase::cmdVelCallback, this);
+    joyInfoSub_ = controllerNH.subscribe("/joy", 1000, &RLControllerBase::joyInfoCallback, this);
+    switchCtrlClient_ = controllerNH.serviceClient<controller_manager_msgs::SwitchController>("/controller_manager/switch_controller");
+    auto emergencyStopCallback = [this](const std_msgs::Float32::ConstPtr &msg){emergency_stop = true;ROS_INFO("Emergency Stop");};
+    emgStopSub_ = controllerNH.subscribe<std_msgs::Float32>("/emergency_stop", 1, emergencyStopCallback);
+
+    // start control
+    auto startControlCallback = [this](const std_msgs::Float32::ConstPtr &msg)
+    {
+      ros::Duration t(0.5);
+      if (ros::Time::now() - switchTime > t)
+      {
+        if (!start_control)
+        {
+          start_control = true;
+          standPercent_ = 0;
+          for (size_t i = 0; i < hybridJointHandles_.size(); i++)
+          {
+            currentJointAngles_[i] = hybridJointHandles_[i].getPosition();
+          }
+          mode_ = Mode::LIE;
+          ROS_INFO("Start Control");
+        }
+        else
+        {
+          start_control = false;
+          mode_ = Mode::DEFAULT;
+          ROS_INFO("ShutDown Control");
+        }
+        switchTime = ros::Time::now();
+      }
+    };
+    startCtrlSub_ = controllerNH.subscribe<std_msgs::Float32>("/start_control", 1, startControlCallback);
+
+    // switchMode
+    auto switchModeCallback = [this](const std_msgs::Float32::ConstPtr &msg)
+    {
+      ros::Duration t(0.8);
+      if (ros::Time::now() - switchTime > t)
+      {
+        if (start_control == true)
+        {
+          if (mode_ == Mode::STAND)
+          {
+            standPercent_ = 0;
+            for (size_t i = 0; i < hybridJointHandles_.size(); i++)
+            {
+              currentJointAngles_[i] = hybridJointHandles_[i].getPosition();
+            }
+            mode_ = Mode::LIE;
+            ROS_INFO("STAND2LIE");
+          }
+          else if (mode_ == Mode::LIE)
+          {
+            standPercent_ = 0;
+            mode_ = Mode::STAND;
+            ROS_INFO("LIE2STAND");
+          }
+        }
+        switchTime = ros::Time::now();
+      }
+    };
+    switchModeSub_ = controllerNH.subscribe<std_msgs::Float32>("/switch_mode", 1, switchModeCallback);
+
+    // walkMode
+    auto walkModeCallback = [this](const std_msgs::Float32::ConstPtr &msg)
+    {
+      ros::Duration t(0.2);
+      if (ros::Time::now() - switchTime > t)
+      {
+        if (mode_ == Mode::STAND)
+        {
+          mode_ = Mode::WALK;
+          ROS_INFO("STAND2WALK");
+          isfirstRecObs_ = true;
+        }
+        if (mode_ == Mode::JUMP)
+        {
+          mode_ = Mode::WALK;
+          ROS_INFO("JUMP2WALK");
+          isfirstRecObs_ = true;
+        }
+        switchTime = ros::Time::now();
+      }
+    };
+    walkModeSub_ = controllerNH.subscribe<std_msgs::Float32>("/walk_mode", 1, walkModeCallback);
+
+    // positionMode
+    auto positionModeCallback = [this](const std_msgs::Float32::ConstPtr &msg)
+    {
+      ros::Duration t(0.2);
+      if (ros::Time::now() - switchTime > t)
+      {
+        if (mode_ == Mode::WALK )
+        {
+          mode_ = Mode::STAND;
+          ROS_INFO("WALK2STAND");
+        }
+        if (mode_ == Mode::JUMP )
+        {
+          mode_ = Mode::STAND;
+          ROS_INFO("JUMP2STAND");
+        }
+        else if (mode_ == Mode::DEFAULT)
+        {
+          standPercent_ = 0;
+          for (size_t i = 0; i < hybridJointHandles_.size(); i++)
+          {
+            currentJointAngles_[i] = hybridJointHandles_[i].getPosition();
+          }
+          mode_ = Mode::LIE;
+          ROS_INFO("DEF2LIE");
+        }
+
+        switchTime = ros::Time::now();
+      }
+    };
+    positionCtrlSub_ = controllerNH.subscribe<std_msgs::Float32>("/position_control", 1, positionModeCallback);
+
+    auto jumpCallback = [this](const std_msgs::Float32::ConstPtr &msg)
+     {
+       ros::Duration t(1.0);
+       if (ros::Time::now() - switchTime > t)
+       {
+          if (mode_ == Mode::JUMP){
+            jump_toggle = true;
+            record_phase = phase_;
+            ROS_INFO("START JUMP");
+          }
+          if (mode_ == Mode::WALK){
+           mode_ = Mode::JUMP;
+           jump_toggle = false;
+           isfirstRecObsJump_ = true;
+           ROS_INFO("Ready to JUMP");
+          }
+         switchTime = ros::Time::now();
+       }
+     };
+     jumpSub_ = controllerNH.subscribe<std_msgs::Float32>("/start_jump", 1, jumpCallback);
+    return true;
+  }
+
+  std::atomic<scalar_t> kp_stance{0};
+  std::atomic<scalar_t> kd_stance{3};
+
+  // only once
+  void RLControllerBase::starting(const ros::Time &time)
+  {
+    updateStateEstimation(time, ros::Duration(0.002));
+    currentJointAngles_.resize(hybridJointHandles_.size());
+    scalar_t durationSecs = 2.0;
+    standDuration_ = durationSecs * 500.0;
+    standPercent_ = 0;
+    mode_ = Mode::DEFAULT;
+    loopCount_ = 0;
+
+    server_ptr_ = std::make_unique<dynamic_reconfigure::Server<legged_debugger::TutorialsConfig>>(ros::NodeHandle("controller"));
+    dynamic_reconfigure::Server<legged_debugger::TutorialsConfig>::CallbackType f;
+    f = boost::bind(&RLControllerBase::dynamicParamCallback, this, _1, _2);
+    server_ptr_->setCallback(f);
+
+    pos_des_output_.resize(joint_dim_);
+    vel_des_output_.resize(joint_dim_);
+    pos_des_output_.setZero();
+    vel_des_output_.setZero();
+
+  }
+
+  void RLControllerBase::update(const ros::Time &time, const ros::Duration &period)
+  {
+    logRecorder_->Open();
+    
+    logRecorder_->WriteScalar(time.toSec());
+
+    ros::NodeHandle nh;
+    updateStateEstimation(time, period);
+    // ROS_WARN(mode: %d, mode_);
+    switch (mode_)
+    {
+    case Mode::DEFAULT:
+      handleDefautMode();
+      break;
+    case Mode::LIE:
+      handleLieMode();
+      break;
+    case Mode::STAND:
+      handleStandMode();
+      break;
+    case Mode::WALK:
+      handleWalkMode();
+      break;
+    case Mode::JUMP:
+      handleJumpMode();
+      break;
+
+    default:
+      ROS_ERROR_STREAM("Unexpected mode encountered: " << static_cast<int>(mode_));
+      break;
+    }
+    if (emergency_stop)
+    {
+      emergency_stop = false;
+      mode_ = Mode::DEFAULT;
+    }
+
+    vector_t output_torque(joint_dim_);
+    for (int j = 0; j < hybridJointHandles_.size(); j++)
+    {
+      pos_des_output_(j) = hybridJointHandles_[j].getPositionDesired();
+      vel_des_output_(j) = hybridJointHandles_[j].getVelocityDesired();
+      output_torque(j) = hybridJointHandles_[j].getFeedforward() +
+                          hybridJointHandles_[j].getKp() * (hybridJointHandles_[j].getPositionDesired() - hybridJointHandles_[j].getPosition()) +
+                          hybridJointHandles_[j].getKd() * (hybridJointHandles_[j].getVelocityDesired() - hybridJointHandles_[j].getVelocity());
+    }
+    outputPlannedJointPosPublisher_.publish(createFloat64MultiArrayFromVector(pos_des_output_));
+    outputPlannedJointVelPublisher_.publish(createFloat64MultiArrayFromVector(vel_des_output_));
+    outputPlannedTorquePublisher_.publish(createFloat64MultiArrayFromVector(output_torque));
+
+    logRecorder_->WriteEigenVec(pos_des_output_);
+    logRecorder_->WriteEigenVec(vel_des_output_);
+    logRecorder_->WriteEigenVec(output_torque);
+    
+    logRecorder_->Close();
+
+    loopCount_++;
+  }
+
+  void RLControllerBase::handleDefautMode()
+  {
+    for (int j = 0; j < hybridJointHandles_.size(); j++)
+      hybridJointHandles_[j].setCommand(0, 0, 0, 0.1, 0);
+
+    // ROS_WARN(The value of kdConfig.cfg_kd is: %f, kdConfig.cfg_kd);
+  }
+
+  void RLControllerBase::handleLieMode()
+  {
+    if (standPercent_ <= 1)
+    {
+      for (int j = 0; j < hybridJointHandles_.size(); j++)
+      {
+        if(j == 8 || j == 17){
+          scalar_t pos_des = currentJointAngles_[j] * (1 - standPercent_) + lieJointAngles_[j] * standPercent_;
+          hybridJointHandles_[j].setCommand(pos_des, 0, 50, 0.01, 0);
+        }
+        else{
+          scalar_t pos_des = currentJointAngles_[j] * (1 - standPercent_) + lieJointAngles_[j] * standPercent_;
+          hybridJointHandles_[j].setCommand(pos_des, 0, 50, 1, 0);
+        }
+      }
+      standPercent_ += 1 / standDuration_;
+      standPercent_ = std::min(standPercent_, scalar_t(1));
+    }
+  }
+
+  void RLControllerBase::handleStandMode()
+  {
+    if (standPercent_ <= 1)
+    {
+      for (int j = 0; j < hybridJointHandles_.size(); j++)
+      {
+        if(j == 8 || j == 17){
+          scalar_t pos_des = lieJointAngles_[j] * (1 - standPercent_) + standJointAngles_[j] * standPercent_;
+          hybridJointHandles_[j].setCommand(pos_des, 0, 50, 0.01, 0);
+        }
+        else{
+          scalar_t pos_des = lieJointAngles_[j] * (1 - standPercent_) + standJointAngles_[j] * standPercent_;
+          hybridJointHandles_[j].setCommand(pos_des, 0, 50, 1, 0);
+        }
+      }
+      standPercent_ += 1 / standDuration_;
+      standPercent_ = std::min(standPercent_, scalar_t(1));
+    }
+  }
+
+  void RLControllerBase::updateStateEstimation(const ros::Time &time, const ros::Duration &period)
+  {
+    vector_t jointPos(DofNum_actions), jointVel(DofNum_actions), jointTor(DofNum_actions);
+
+    vector_t imuEulerXyz(3);
+    contact_flag_t contacts;
+    quaternion_t quat;
+    vector3_t angularVel, linearAccel;
+    matrix3_t orientationCovariance, angularVelCovariance, linearAccelCovariance;
+    for (size_t i = 0; i < DofNum_actions; ++i)
+    {
+      jointPos(i) = hybridJointHandles_[i].getPosition();
+      jointVel(i) = hybridJointHandles_[i].getVelocity();
+      jointTor(i) = hybridJointHandles_[i].getEffort();
+    }
+    
+    for (size_t i = 0; i < 4; ++i)
+    {
+      quat.coeffs()(i) = imuSensorHandles_.getOrientation()[i];
+    }
+    for (size_t i = 0; i < 3; ++i)
+    {
+      angularVel(i) = imuSensorHandles_.getAngularVelocity()[i];
+      linearAccel(i) = imuSensorHandles_.getLinearAcceleration()[i];
+    }
+    for (size_t i = 0; i < 9; ++i)
+    {
+      orientationCovariance(i) = imuSensorHandles_.getOrientationCovariance()[i];
+      angularVelCovariance(i) = imuSensorHandles_.getAngularVelocityCovariance()[i];
+      linearAccelCovariance(i) = imuSensorHandles_.getLinearAccelerationCovariance()[i];
+    }
+
+    propri_.jointPos = jointPos;
+    propri_.jointVel = jointVel;
+    propri_.baseAngVel = angularVel;
+
+    vector3_t gravityVector(0, 0, -1);
+    vector3_t zyx = quatToZyx(quat);
+    matrix_t inverseRot = getRotationMatrixFromZyxEulerAngles(zyx).inverse();
+    propri_.projectedGravity = inverseRot * gravityVector;
+    propri_.baseEulerXyz = quatToXyz(quat);
+
+    phase_ = time.toSec();
+
+    for (size_t i = 0; i < 3; ++i)
+    {
+      imuEulerXyz(i) = propri_.baseEulerXyz[i];
+    }
+
+    realImuAngularVelPublisher_.publish(createFloat64MultiArrayFromVector(angularVel));
+    realImuLinearAccPublisher_.publish(createFloat64MultiArrayFromVector(linearAccel));
+    realImuEulerXyzPulbisher.publish(createFloat64MultiArrayFromVector(imuEulerXyz));
+
+    realTorquePublisher_.publish(createFloat64MultiArrayFromVector(jointTor));
+    realJointPosPublisher_.publish(createFloat64MultiArrayFromVector(jointPos));
+    realJointVelPublisher_.publish(createFloat64MultiArrayFromVector(jointVel));
+
+    robotStatePublisherPtr_->publishFixedTransforms(true);
+    // tf::Transform baseTransform;
+    // baseTransform.setOrigin(tf::Vector3(0.0, 0.0, 0.0)); // Origin
+    // baseTransform.setRotation(tf::Quaternion(quat.coeffs()(0), quat.coeffs()(1), quat.coeffs()(2), quat.coeffs()(3)));  
+    // tfBroadcaster_.sendTransform(tf::StampedTransform(baseTransform, time, "world", "base_link"));
+
+
+  std::map<std::string, scalar_t> jointPositions{
+      {"arm_l1_joint", jointPos(0)}, {"arm_l2_joint", jointPos(1)}, {"arm_l3_joint", jointPos(2)}, {"arm_l4_joint", jointPos(3)},
+      {"leg_l1_joint", jointPos(4)}, {"leg_l2_joint", jointPos(5)}, {"leg_l3_joint", jointPos(6)}, 
+      {"leg_l4_joint", jointPos(7)}, {"leg_l5_joint", jointPos(8)},  
+      {"arm_r1_joint", jointPos(9)}, {"arm_r2_joint", jointPos(10)}, {"arm_r3_joint", jointPos(11)}, {"arm_r4_joint", jointPos(12)},
+      {"leg_r1_joint", jointPos(13)}, {"leg_r2_joint", jointPos(14)}, {"leg_r3_joint", jointPos(15)}, 
+      {"leg_r4_joint", jointPos(16)}, {"leg_r5_joint", jointPos(17)}};
+      
+      
+   robotStatePublisherPtr_->publishTransforms(jointPositions, time);
+
+    logRecorder_->WriteEigenVec(jointPos);
+    logRecorder_->WriteEigenVec(jointVel);
+    logRecorder_->WriteEigenVec(jointTor);
+    
+    logRecorder_->WriteEigenVec(imuEulerXyz);
+    logRecorder_->WriteEigenVec(angularVel);
+    logRecorder_->WriteEigenVec(linearAccel);
+  }
+
+  void RLControllerBase::cmdVelCallback(const geometry_msgs::Twist &msg)
+  {
+    command_.x = msg.linear.x;
+    command_.y = msg.linear.y;
+    command_.yaw = msg.angular.z;
+  }
+
+  void RLControllerBase::dynamicParamCallback(legged_debugger::TutorialsConfig &config, uint32_t level)
+  {
+    kp_stance = config.kp_stance;
+    kd_stance = config.kd_stance;
+  }
+
+  void RLControllerBase::joyInfoCallback(const sensor_msgs::Joy &msg)
+  {
+    if (msg.header.frame_id.empty())
+    {
+      return;
+    }
+    for (int i = 0; i < msg.axes.size(); i++)
+    {
+      joyInfo.axes[i] = msg.axes[i];
+    }
+    for (int i = 0; i < msg.buttons.size(); i++)
+    {
+      joyInfo.buttons[i] = msg.buttons[i];
+    }
+  }
+} // namespace legged
+
+PLUGINLIB_EXPORT_CLASS(legged::RLControllerBase, controller_interface::ControllerBase)

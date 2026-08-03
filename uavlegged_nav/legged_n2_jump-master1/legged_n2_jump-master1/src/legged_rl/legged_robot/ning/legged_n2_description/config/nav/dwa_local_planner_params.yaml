@@ -1,0 +1,41 @@
+DWAPlannerROS:
+  # -- 机器人速度限制 --
+  max_vel_x: 0.6
+  min_vel_x: -0.2
+  
+  max_vel_y: 0.3    # 四足机器人往往具备横向移动能力
+  min_vel_y: -0.3
+  
+  max_vel_trans: 0.6
+  min_vel_trans: 0.05
+  
+  max_vel_theta: 1.0
+  min_vel_theta: 0.1
+  
+  # -- 加速度限制 --
+  acc_lim_x: 2.0
+  acc_lim_y: 2.0
+  acc_lim_theta: 2.0
+  
+  # -- 目标点公差（到站判定） --
+  xy_goal_tolerance: 0.2    # 允许距离终点偏移 0.2 米
+  yaw_goal_tolerance: 0.15  # 允许偏航角误差 0.15 弧度
+  latch_xy_goal_tolerance: true
+  
+  # -- 轨迹模拟（Forward Simulation） --
+  sim_time: 1.5       # 往前推演 1.5 秒
+  vx_samples: 15
+  vy_samples: 10
+  vtheta_samples: 20
+  
+  # -- 轨迹评分（权重）--
+  path_distance_bias: 32.0   # 靠近全局路径的权重
+  goal_distance_bias: 24.0   # 靠近终点的权重
+  occdist_scale: 0.05        # 躲避障碍物的权重
+  forward_point_distance: 0.325
+  stop_time_buffer: 0.2
+  scaling_speed: 0.25
+  max_scaling_factor: 0.2
+  
+  # -- 震荡防止 --
+  oscillation_reset_dist: 0.05
