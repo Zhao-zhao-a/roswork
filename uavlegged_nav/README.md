@@ -306,11 +306,13 @@ roslaunch legged_n2_description n2_mapping_and_navigation.launch
 
 ## 运行效果
 
-以下是运行效果的视频演示：
+以下是本项目的实际运行效果演示：
 
-- [导航视频](./media/vedio1.webm)
-- [建图视频](./media/vedio2.mp4)
+### 1. 无人机建图演示
+<video src="./media/vedio1.webm" controls="controls" width="100%" height="auto"></video>
 
+### 2. 人形机器人自主导航演示
+<video src="./media/vedio2.mp4" controls="controls" width="100%" height="auto"></video>
 ## 10. 常见问题
 
 **Q1**：`./simulation.sh` 报错找不到 `rl_controllers`。
