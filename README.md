@@ -309,10 +309,10 @@ roslaunch legged_n2_description n2_mapping_and_navigation.launch
 以下是本项目的实际运行效果演示：
 
 ### 1. 无人机建图演示
-![无人机建图实机演示](uavlegged_nav/media/vedio1.webm)
+![无人机建图演示](uavlegged_nav/media/vedio1.webm)
 
 ### 2. 人形机器人自主导航演示
-![人形机器人导航实机演示](uavlegged_nav/media/vedio2.mp4)
+![人形机器人导航演示](uavlegged_nav/media/vedio2.mp4)
 ## 10. 常见问题
 
 **Q1**：`./simulation.sh` 报错找不到 `rl_controllers`。
