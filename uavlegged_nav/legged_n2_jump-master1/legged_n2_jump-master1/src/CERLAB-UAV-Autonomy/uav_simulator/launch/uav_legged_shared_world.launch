@@ -1,0 +1,40 @@
+<launch>
+  <arg name="paused" value="false"/>
+  <arg name="verbose" value="false"/>
+  <arg name="use_sim_time" value="true"/>
+  <arg name="debug" value="false"/>
+  <arg name="world_name" default="$(find legged_gazebo)/worlds/empty_world.world"/>
+  <arg name="uav_x" default="2.0"/>
+  <arg name="uav_y" default="0.0"/>
+  <arg name="uav_z" default="1.5"/>
+  <arg name="legged_x" default="-2.0"/>
+  <arg name="legged_y" default="0.0"/>
+  <arg name="legged_z" default="0.8"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="paused" value="$(arg paused)"/>
+    <arg name="world_name" value="$(arg world_name)"/>
+    <arg name="verbose" value="$(arg verbose)"/>
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="debug" value="$(arg debug)"/>
+  </include>
+
+  <param name="robot_description" command="cat '$(find uav_simulator)/urdf/quadcopter.urdf'" />
+  <param name="legged_robot_description" textfile="$(find legged_n2_description)/urdf/N2.urdf"/>
+  <param name="legged_robot_description_sim" textfile="$(find legged_n2_description)/urdf/N2.urdf"/>
+
+  <rosparam file="$(find legged_gazebo)/config/default.yaml" command="load"/>
+
+  <node pkg="topic_tools" type="throttle" name="gt_pose_throttle" args="messages /CERLAB/quadcopter/pose_raw 30 /CERLAB/quadcopter/pose"/>
+  <node pkg="topic_tools" type="throttle" name="gt_vel_throttle" args="messages /CERLAB/quadcopter/vel_raw 30 /CERLAB/quadcopter/vel"/>
+  <node pkg="topic_tools" type="throttle" name="gt_acc_throttle" args="messages /CERLAB/quadcopter/acc_raw 30 /CERLAB/quadcopter/acc"/>
+  <node pkg="topic_tools" type="throttle" name="gt_odom_throttle" args="messages /CERLAB/quadcopter/odom_raw 30 /CERLAB/quadcopter/odom"/>
+
+  <node name="spawn_quadcopter" pkg="gazebo_ros" type="spawn_model" args="-urdf -param robot_description -model quadcopter -x $(arg uav_x) -y $(arg uav_y) -z $(arg uav_z) -Y 0.0" output="screen"/>
+  <node name="spawn_legged_robot" pkg="gazebo_ros" type="spawn_model" args="-urdf -param legged_robot_description -model ning -x $(arg legged_x) -y $(arg legged_y) -z $(arg legged_z)" output="screen"/>
+
+  <!-- UAV autonomous exploration and mapping -->
+  <include file="$(find autonomous_flight)/launch/dynamic_exploration.launch"/>
+
+  <include file="$(find rl_controllers)/launch/load_ac_controller.launch"/>
+</launch>
